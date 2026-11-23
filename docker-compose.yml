@@ -1,0 +1,69 @@
+name: ecommerce-platform
+
+# Cada microservicio tiene su propia base de datos (patrón "database per service").
+# Los valores por defecto son solo para desarrollo: define tu propio .env (ver .env.example).
+
+x-node-service: &node-service
+  restart: unless-stopped
+  networks: [backend]
+
+services:
+  user-db:
+    image: mongo:8
+    restart: unless-stopped
+    volumes:
+      - user-db-data:/data/db
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  catalog-db:
+    image: mongo:8
+    restart: unless-stopped
+    volumes:
+      - catalog-db-data:/data/db
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  user-service:
+    <<: *node-service
+    build: ./services/user-service
+    ports:
+      - "${USER_SERVICE_PORT:-3001}:3001"
+    environment:
+      PORT: 3001
+      MONGO_URI: mongodb://user-db:27017/users
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@shop.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+    depends_on:
+      user-db:
+        condition: service_healthy
+
+  product-catalog-service:
+    <<: *node-service
+    build: ./services/product-catalog-service
+    ports:
+      - "${CATALOG_SERVICE_PORT:-3002}:3002"
+    environment:
+      PORT: 3002
+      MONGO_URI: mongodb://catalog-db:27017/catalog
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on:
+      catalog-db:
+        condition: service_healthy
+
+networks:
+  backend:
+
+volumes:
+  user-db-data:
+  catalog-db-data:
