@@ -197,3 +197,7 @@ curl -s 'localhost:3002/api/products?q=teclado&inStock=true'
 - [ ] Documentación OpenAPI/Swagger.
 - [ ] Reservas de inventario con expiración y almacenes múltiples.
 - [ ] Subida de imágenes de producto a almacenamiento de objetos (S3 o similar).
+
+## Licencia
+
+Distribuido bajo la licencia MIT. Consulta [LICENSE](LICENSE).

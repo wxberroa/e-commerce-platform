@@ -4,6 +4,7 @@
   "description": "Registro, autenticación (JWT) y gestión de perfil de usuarios",
   "type": "module",
   "main": "src/server.js",
+  "license": "MIT",
   "engines": {
     "node": ">=22"
   },
