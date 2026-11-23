@@ -1,7 +1,7 @@
 import express from 'express';
-import mongoose from 'mongoose';
 import { pinoHttp } from 'pino-http';
 import { config } from './config.js';
+import { isDbUp } from './db.js';
 import { authRouter } from './routes/auth.js';
 import { usersRouter } from './routes/users.js';
 import { errorHandler, notFound } from './middleware/errors.js';
@@ -14,7 +14,7 @@ export function createApp({ logging = true } = {}) {
   if (logging) app.use(pinoHttp({ level: config.logLevel, redact: ['req.headers.authorization'] }));
 
   app.get('/health', (_req, res) => {
-    const dbUp = mongoose.connection.readyState === 1;
+    const dbUp = isDbUp();
     res.status(dbUp ? 200 : 503).json({ service: 'user-service', status: dbUp ? 'ok' : 'degraded', db: dbUp });
   });
 

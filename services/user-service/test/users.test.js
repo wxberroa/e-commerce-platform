@@ -1,28 +1,15 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import mongoose from 'mongoose';
 import request from 'supertest';
-import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createApp } from '../src/app.js';
+import { closeDb, openDb } from '../src/db.js';
 import { User } from '../src/models/User.js';
 
-let mongod;
 const app = createApp({ logging: false });
 
-before(async () => {
-  mongod = await MongoMemoryServer.create();
-  await mongoose.connect(mongod.getUri());
-  await User.syncIndexes();
-});
-
-after(async () => {
-  await mongoose.disconnect();
-  await mongod.stop();
-});
-
-beforeEach(async () => {
-  await User.deleteMany({});
-});
+before(() => openDb(':memory:'));
+after(() => closeDb());
+beforeEach(() => User.deleteAll());
 
 const alice = { email: 'alice@example.com', password: 'supersecret', name: 'Alice' };
 
@@ -108,6 +95,16 @@ test('cambio de contraseña', async () => {
   assert.equal(login.status, 200);
 });
 
+test('el email no distingue mayúsculas y la cuenta se puede borrar', async () => {
+  await register();
+  assert.equal((await register({ ...alice, email: 'ALICE@example.com' })).status, 409);
+  const { body } = await request(app).post('/api/auth/login').send({ email: 'Alice@Example.com', password: alice.password });
+  assert.ok(body.token);
+  const del = await request(app).delete('/api/users/me').set('Authorization', `Bearer ${body.token}`);
+  assert.equal(del.status, 204);
+  assert.equal((await request(app).get('/api/users/me').set('Authorization', `Bearer ${body.token}`)).status, 404);
+});
+
 test('endpoints de administración solo para admin', async () => {
   const { body: customer } = await register();
   await User.create({ email: 'admin@example.com', password: 'adminpass', name: 'Admin', role: 'admin' });
@@ -129,6 +126,8 @@ test('endpoints de administración solo para admin', async () => {
   assert.equal(promote.status, 200);
   assert.equal(promote.body.role, 'admin');
 
-  const badId = await request(app).get('/api/users/123').set('Authorization', `Bearer ${admin.token}`);
+  const badId = await request(app).get('/api/users/abc').set('Authorization', `Bearer ${admin.token}`);
   assert.equal(badId.status, 400);
+  const missing = await request(app).get('/api/users/9999').set('Authorization', `Bearer ${admin.token}`);
+  assert.equal(missing.status, 404);
 });

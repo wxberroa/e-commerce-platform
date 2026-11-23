@@ -1,11 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { Product } from '../models/Product.js';
+import { Category } from '../models/Category.js';
+import { Product, inventoryView } from '../models/Product.js';
 import { requireAdmin } from '../middleware/auth.js';
-import { HttpError, validate } from '../middleware/errors.js';
-import { findCategory } from './categories.js';
-
-const objectId = z.string().regex(/^[a-f\d]{24}$/i, 'Identificador inválido');
+import { HttpError, parseId, validate } from '../middleware/errors.js';
 
 const createSchema = z.object({
   name: z.string().trim().min(1),
@@ -13,7 +11,7 @@ const createSchema = z.object({
   sku: z.string().trim().min(1),
   price: z.number().nonnegative(),
   currency: z.string().length(3).optional(),
-  category: objectId.optional(),
+  category: z.number().int().positive().nullable().optional(),
   images: z.array(z.url()).optional(),
   stock: z.number().int().nonnegative().optional(),
   isActive: z.boolean().optional(),
@@ -36,106 +34,77 @@ const adjustStockSchema = z.object({
   delta: z.number().int().refine((n) => n !== 0, 'delta no puede ser 0'),
 });
 
-async function findProductOr404(id) {
-  const product = await Product.findById(id);
+function findProductOr404(rawId) {
+  const product = Product.findById(parseId(rawId));
   if (!product) throw new HttpError(404, 'Producto no encontrado');
   return product;
 }
 
-async function assertCategoryExists(categoryId) {
-  if (categoryId && !(await findCategory(categoryId))) {
+function assertCategoryExists(categoryId) {
+  if (categoryId && !Category.findById(categoryId)) {
     throw new HttpError(400, 'La categoría indicada no existe');
   }
-}
-
-function inventoryView(product) {
-  return { productId: product.id, sku: product.sku, stock: product.stock, inStock: product.stock > 0 };
 }
 
 export const productsRouter = Router();
 
 // --- Catálogo (público) ---
-productsRouter.get('/', async (req, res) => {
+productsRouter.get('/', (req, res) => {
   const query = validate(listQuerySchema, req.query);
-  const filter = { isActive: true };
-
-  if (query.q) filter.$text = { $search: query.q };
+  let categoryId;
   if (query.category) {
-    const category = await findCategory(query.category);
+    const category = Category.findByIdOrSlug(query.category);
     if (!category) return res.json({ items: [], page: query.page, limit: query.limit, total: 0 });
-    filter.category = category._id;
+    categoryId = category.id;
   }
-  if (query.minPrice !== undefined || query.maxPrice !== undefined) {
-    filter.price = {};
-    if (query.minPrice !== undefined) filter.price.$gte = query.minPrice;
-    if (query.maxPrice !== undefined) filter.price.$lte = query.maxPrice;
-  }
-  if (query.inStock === 'true') filter.stock = { $gt: 0 };
-  if (query.inStock === 'false') filter.stock = 0;
-
-  const [items, total] = await Promise.all([
-    Product.find(filter)
-      .populate('category', 'name slug')
-      .sort(query.sort)
-      .skip((query.page - 1) * query.limit)
-      .limit(query.limit),
-    Product.countDocuments(filter),
-  ]);
+  const { items, total } = Product.list({
+    ...query,
+    categoryId,
+    inStock: query.inStock === undefined ? undefined : query.inStock === 'true',
+  });
   return res.json({ items, page: query.page, limit: query.limit, total });
 });
 
-productsRouter.get('/:id', async (req, res) => {
-  const product = await findProductOr404(req.params.id);
-  await product.populate('category', 'name slug');
-  res.json(product);
+productsRouter.get('/:id', (req, res) => {
+  res.json(findProductOr404(req.params.id));
 });
 
 // --- Administración de productos ---
-productsRouter.post('/', requireAdmin, async (req, res) => {
+productsRouter.post('/', requireAdmin, (req, res) => {
   const data = validate(createSchema, req.body);
-  await assertCategoryExists(data.category);
-  res.status(201).json(await Product.create(data));
+  assertCategoryExists(data.category);
+  res.status(201).json(Product.create(data));
 });
 
-productsRouter.patch('/:id', requireAdmin, async (req, res) => {
+productsRouter.patch('/:id', requireAdmin, (req, res) => {
   const data = validate(updateSchema, req.body);
-  await assertCategoryExists(data.category);
-  const product = await findProductOr404(req.params.id);
-  product.set(data);
-  await product.save();
-  res.json(product);
+  assertCategoryExists(data.category);
+  const product = findProductOr404(req.params.id);
+  res.json(Product.update(product.id, data));
 });
 
-productsRouter.delete('/:id', requireAdmin, async (req, res) => {
-  const product = await findProductOr404(req.params.id);
-  await product.deleteOne();
+productsRouter.delete('/:id', requireAdmin, (req, res) => {
+  const product = findProductOr404(req.params.id);
+  Product.delete(product.id);
   res.status(204).end();
 });
 
 // --- Inventario ---
-productsRouter.get('/:id/inventory', async (req, res) => {
-  res.json(inventoryView(await findProductOr404(req.params.id)));
+productsRouter.get('/:id/inventory', (req, res) => {
+  res.json(inventoryView(findProductOr404(req.params.id)));
 });
 
-productsRouter.put('/:id/inventory', requireAdmin, async (req, res) => {
+productsRouter.put('/:id/inventory', requireAdmin, (req, res) => {
   const { stock } = validate(setStockSchema, req.body);
-  const product = await findProductOr404(req.params.id);
-  product.stock = stock;
-  await product.save();
-  res.json(inventoryView(product));
+  const product = findProductOr404(req.params.id);
+  res.json(inventoryView(Product.setStock(product.id, stock)));
 });
 
 // Ajuste atómico (+entrada / -salida). Pensado para que el futuro Order Service
 // descuente stock sin condiciones de carrera.
-productsRouter.post('/:id/inventory/adjust', requireAdmin, async (req, res) => {
+productsRouter.post('/:id/inventory/adjust', requireAdmin, (req, res) => {
   const { delta } = validate(adjustStockSchema, req.body);
-  const filter = { _id: req.params.id };
-  if (delta < 0) filter.stock = { $gte: -delta };
-
-  const updated = await Product.findOneAndUpdate(filter, { $inc: { stock: delta } }, { returnDocument: 'after' });
-  if (!updated) {
-    await findProductOr404(req.params.id); // 404 si no existe
-    throw new HttpError(409, 'Stock insuficiente');
-  }
-  res.json(inventoryView(updated));
+  const product = findProductOr404(req.params.id);
+  if (!Product.adjustStock(product.id, delta)) throw new HttpError(409, 'Stock insuficiente');
+  res.json(inventoryView(Product.findById(product.id)));
 });

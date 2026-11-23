@@ -1,37 +1,22 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
-import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createApp } from '../src/app.js';
 import { config } from '../src/config.js';
-import { Category } from '../src/models/Category.js';
+import { closeDb, openDb } from '../src/db.js';
 import { Product } from '../src/models/Product.js';
 
-let mongod;
 const app = createApp({ logging: false });
 
 // Tokens con el mismo formato que emite user-service
-const token = (role) =>
-  jwt.sign({ role }, config.jwtSecret, { subject: new mongoose.Types.ObjectId().toString() });
+const token = (role) => jwt.sign({ role }, config.jwtSecret, { subject: '1' });
 const admin = { Authorization: `Bearer ${token('admin')}` };
 const customer = { Authorization: `Bearer ${token('customer')}` };
 
-before(async () => {
-  mongod = await MongoMemoryServer.create();
-  await mongoose.connect(mongod.getUri());
-  await Promise.all([Category.syncIndexes(), Product.syncIndexes()]);
-});
-
-after(async () => {
-  await mongoose.disconnect();
-  await mongod.stop();
-});
-
-beforeEach(async () => {
-  await Promise.all([Category.deleteMany({}), Product.deleteMany({})]);
-});
+before(() => openDb(':memory:'));
+after(() => closeDb());
+beforeEach(() => Product.deleteAll());
 
 async function createCategory(name = 'Electrónica') {
   const res = await request(app).post('/api/categories').set(admin).send({ name });
@@ -89,7 +74,7 @@ test('productos: creación, validación, SKU único y categoría existente', asy
     (await request(app).post('/api/products').set(admin).send({ name: 'Otro', sku: 'KB-001', price: 1 })).status,
     409,
   );
-  const fakeCat = new mongoose.Types.ObjectId().toString();
+  const fakeCat = 9999;
   assert.equal(
     (await request(app).post('/api/products').set(admin).send({ name: 'Otro', sku: 'Z', price: 1, category: fakeCat }))
       .status,
@@ -98,6 +83,10 @@ test('productos: creación, validación, SKU único y categoría existente', asy
 
   const upd = await request(app).patch(`/api/products/${p.id}`).set(admin).send({ price: 45 });
   assert.equal(upd.body.price, 45);
+
+  const sinCat = await request(app).patch(`/api/products/${p.id}`).set(admin).send({ category: null });
+  assert.equal(sinCat.body.category, null);
+  assert.equal((await request(app).get('/api/products/abc')).status, 400);
 
   assert.equal((await request(app).delete(`/api/products/${p.id}`).set(admin)).status, 204);
   assert.equal((await request(app).get(`/api/products/${p.id}`)).status, 404);
@@ -154,7 +143,7 @@ test('inventario: consulta, fijar stock y ajustes atómicos', async () => {
   const up = await request(app).post(`/api/products/${p.id}/inventory/adjust`).set(admin).send({ delta: 7 });
   assert.equal(up.body.stock, 7);
 
-  const missing = new mongoose.Types.ObjectId().toString();
+  const missing = 9999;
   assert.equal(
     (await request(app).post(`/api/products/${missing}/inventory/adjust`).set(admin).send({ delta: -1 })).status,
     404,

@@ -1,6 +1,7 @@
-FROM node:22-alpine
+FROM node:24-alpine
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    DB_PATH=/app/data/users.db
 WORKDIR /app
 
 COPY package*.json ./
@@ -8,10 +9,14 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY src ./src
 
+# Carpeta del archivo SQLite; en docker-compose se monta como volumen.
+RUN mkdir -p /app/data && chown node:node /app/data
+VOLUME /app/data
+
 USER node
 EXPOSE 3001
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:3001/health || exit 1
 
-CMD ["node", "src/server.js"]
+CMD ["node", "--disable-warning=ExperimentalWarning", "src/server.js"]

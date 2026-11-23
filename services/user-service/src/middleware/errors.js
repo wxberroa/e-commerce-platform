@@ -1,5 +1,4 @@
 import { ZodError } from 'zod';
-import mongoose from 'mongoose';
 
 export class HttpError extends Error {
   constructor(status, message, details) {
@@ -13,6 +12,18 @@ export function validate(schema, data) {
   return schema.parse(data);
 }
 
+// Los ids son enteros positivos (INTEGER PRIMARY KEY de SQLite).
+export function parseId(value) {
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id < 1 || String(id) !== String(value)) {
+    throw new HttpError(400, `Identificador inválido: ${value}`);
+  }
+  return id;
+}
+
+const SQLITE_CONSTRAINT_UNIQUE = 2067;
+const SQLITE_CONSTRAINT_FOREIGNKEY = 787;
+
 export function notFound(_req, _res, next) {
   next(new HttpError(404, 'Ruta no encontrada'));
 }
@@ -25,11 +36,11 @@ export function errorHandler(err, req, res, _next) {
       details: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
     });
   }
-  if (err instanceof mongoose.Error.CastError) {
-    return res.status(400).json({ error: `Identificador inválido: ${err.value}` });
+  if (err?.code === 'ERR_SQLITE_ERROR' && err.errcode === SQLITE_CONSTRAINT_UNIQUE) {
+    return res.status(409).json({ error: 'El recurso ya existe', details: err.message });
   }
-  if (err?.code === 11000) {
-    return res.status(409).json({ error: 'El recurso ya existe', details: err.keyValue });
+  if (err?.code === 'ERR_SQLITE_ERROR' && err.errcode === SQLITE_CONSTRAINT_FOREIGNKEY) {
+    return res.status(409).json({ error: 'El recurso está referenciado por otros datos' });
   }
   if (err instanceof SyntaxError && err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'JSON mal formado' });

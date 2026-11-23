@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { User } from '../models/User.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
-import { HttpError, validate } from '../middleware/errors.js';
+import { HttpError, parseId, validate } from '../middleware/errors.js';
 
 const addressSchema = z.object({
   street: z.string().trim().optional(),
@@ -30,62 +30,54 @@ const updateRoleSchema = z.object({ role: z.enum(['customer', 'admin']) });
 export const usersRouter = Router();
 usersRouter.use(requireAuth);
 
-async function findUserOr404(id, withPassword = false) {
-  const query = User.findById(id);
-  if (withPassword) query.select('+password');
-  const user = await query;
+function findUserOr404(id) {
+  const user = User.findById(id);
   if (!user) throw new HttpError(404, 'Usuario no encontrado');
   return user;
 }
 
 // --- Perfil propio ---
-usersRouter.get('/me', async (req, res) => {
-  res.json(await findUserOr404(req.user.id));
+usersRouter.get('/me', (req, res) => {
+  res.json(findUserOr404(req.user.id));
 });
 
-usersRouter.patch('/me', async (req, res) => {
+usersRouter.patch('/me', (req, res) => {
   const data = validate(updateProfileSchema, req.body);
-  const user = await findUserOr404(req.user.id);
-  user.set(data);
-  await user.save();
-  res.json(user);
+  findUserOr404(req.user.id);
+  res.json(User.updateProfile(req.user.id, data));
 });
 
 usersRouter.put('/me/password', async (req, res) => {
   const { currentPassword, newPassword } = validate(changePasswordSchema, req.body);
-  const user = await findUserOr404(req.user.id, true);
-  if (!(await user.comparePassword(currentPassword))) {
+  const row = User.findRowById(req.user.id);
+  if (!row) throw new HttpError(404, 'Usuario no encontrado');
+  if (!(await User.verifyPassword(row, currentPassword))) {
     throw new HttpError(401, 'La contraseña actual no es correcta');
   }
-  user.password = newPassword;
-  await user.save();
+  await User.setPassword(req.user.id, newPassword);
   res.status(204).end();
 });
 
-usersRouter.delete('/me', async (req, res) => {
-  await User.deleteOne({ _id: req.user.id });
+usersRouter.delete('/me', (req, res) => {
+  User.delete(req.user.id);
   res.status(204).end();
 });
 
 // --- Administración ---
-usersRouter.get('/', requireRole('admin'), async (req, res) => {
+usersRouter.get('/', requireRole('admin'), (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
-  const [items, total] = await Promise.all([
-    User.find().sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
-    User.countDocuments(),
-  ]);
+  const { items, total } = User.list({ page, limit });
   res.json({ items, page, limit, total });
 });
 
-usersRouter.get('/:id', requireRole('admin'), async (req, res) => {
-  res.json(await findUserOr404(req.params.id));
+usersRouter.get('/:id', requireRole('admin'), (req, res) => {
+  res.json(findUserOr404(parseId(req.params.id)));
 });
 
-usersRouter.patch('/:id/role', requireRole('admin'), async (req, res) => {
+usersRouter.patch('/:id/role', requireRole('admin'), (req, res) => {
   const { role } = validate(updateRoleSchema, req.body);
-  const user = await findUserOr404(req.params.id);
-  user.role = role;
-  await user.save();
-  res.json(user);
+  const id = parseId(req.params.id);
+  findUserOr404(id);
+  res.json(User.setRole(id, role));
 });

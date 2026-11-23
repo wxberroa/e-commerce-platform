@@ -1,8 +1,6 @@
 import { Router } from 'express';
-import mongoose from 'mongoose';
 import { z } from 'zod';
 import { Category } from '../models/Category.js';
-import { Product } from '../models/Product.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { HttpError, validate } from '../middleware/errors.js';
 
@@ -12,46 +10,38 @@ const createSchema = z.object({
 });
 const updateSchema = createSchema.partial().strict();
 
-// Permite buscar por id o por slug: /api/categories/electronica
-export async function findCategory(idOrSlug) {
-  const filter = mongoose.isValidObjectId(idOrSlug) ? { _id: idOrSlug } : { slug: idOrSlug };
-  return Category.findOne(filter);
-}
-
-async function findCategoryOr404(idOrSlug) {
-  const category = await findCategory(idOrSlug);
+function findCategoryOr404(idOrSlug) {
+  const category = Category.findByIdOrSlug(idOrSlug);
   if (!category) throw new HttpError(404, 'Categoría no encontrada');
   return category;
 }
 
 export const categoriesRouter = Router();
 
-categoriesRouter.get('/', async (_req, res) => {
-  res.json(await Category.find().sort({ name: 1 }));
+categoriesRouter.get('/', (_req, res) => {
+  res.json(Category.list());
 });
 
-categoriesRouter.get('/:idOrSlug', async (req, res) => {
-  res.json(await findCategoryOr404(req.params.idOrSlug));
+categoriesRouter.get('/:idOrSlug', (req, res) => {
+  res.json(findCategoryOr404(req.params.idOrSlug));
 });
 
-categoriesRouter.post('/', requireAdmin, async (req, res) => {
+categoriesRouter.post('/', requireAdmin, (req, res) => {
   const data = validate(createSchema, req.body);
-  res.status(201).json(await Category.create(data));
+  res.status(201).json(Category.create(data));
 });
 
-categoriesRouter.patch('/:idOrSlug', requireAdmin, async (req, res) => {
+categoriesRouter.patch('/:idOrSlug', requireAdmin, (req, res) => {
   const data = validate(updateSchema, req.body);
-  const category = await findCategoryOr404(req.params.idOrSlug);
-  category.set(data);
-  await category.save();
-  res.json(category);
+  const category = findCategoryOr404(req.params.idOrSlug);
+  res.json(Category.update(category.id, data));
 });
 
-categoriesRouter.delete('/:idOrSlug', requireAdmin, async (req, res) => {
-  const category = await findCategoryOr404(req.params.idOrSlug);
-  if (await Product.exists({ category: category._id })) {
+categoriesRouter.delete('/:idOrSlug', requireAdmin, (req, res) => {
+  const category = findCategoryOr404(req.params.idOrSlug);
+  if (Category.hasProducts(category.id)) {
     throw new HttpError(409, 'La categoría tiene productos asociados');
   }
-  await category.deleteOne();
+  Category.delete(category.id);
   res.status(204).end();
 });

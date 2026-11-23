@@ -6,8 +6,8 @@ Esta primera iteración (MVP) incluye los dos primeros servicios:
 
 | Servicio | Responsabilidad | Puerto | Base de datos |
 |---|---|---|---|
-| **User Service** | Registro, autenticación (JWT) y gestión de perfil | `3001` | MongoDB `user-db` |
-| **Product Catalog Service** | Productos, categorías e inventario | `3002` | MongoDB `catalog-db` |
+| **User Service** | Registro, autenticación (JWT) y gestión de perfil | `3001` | SQLite `users.db` |
+| **Product Catalog Service** | Productos, categorías e inventario | `3002` | SQLite `catalog.db` |
 
 El resto de servicios y componentes están en la sección [Pendiente](#pendiente).
 
@@ -23,12 +23,13 @@ El resto de servicios y componentes están en la sección [Pendiente](#pendiente
         └────────┬─────────┘   └─────────────┬──────────────┘
                  │                           │
            ┌─────▼─────┐               ┌─────▼──────┐
-           │  user-db  │               │ catalog-db │
-           │ (MongoDB) │               │ (MongoDB)  │
+           │ users.db  │               │ catalog.db │
+           │ (SQLite)  │               │ (SQLite)   │
            └───────────┘               └────────────┘
+          volumen user-data       volumen catalog-data
 ```
 
-- **Un microservicio, una base de datos.** Cada servicio es dueño de sus datos y no accede a la base del otro.
+- **Un microservicio, una base de datos.** Cada servicio es dueño de su archivo SQLite, guardado en su propio volumen de Docker, y no accede a la base del otro. El esquema se crea automáticamente al arrancar.
 - **Autenticación sin estado.** `user-service` firma un JWT con `sub` (id del usuario) y `role`. `product-catalog-service` solo lo verifica con el secreto compartido `JWT_SECRET`, sin llamar a `user-service`.
 - **Roles.** `customer` (por defecto al registrarse) y `admin`. Las lecturas del catálogo son públicas; las escrituras (productos, categorías, inventario) requieren `admin`.
 - **Logs en JSON por stdout** (`pino-http`), listos para enviarse a un stack de logging centralizado.
@@ -36,11 +37,12 @@ El resto de servicios y componentes están en la sección [Pendiente](#pendiente
 
 ### Stack
 
-Node.js 22 · Express 5 · MongoDB 8 + Mongoose · JWT (`jsonwebtoken`) · `bcryptjs` · validación con `zod` · tests con `node:test` + `supertest` + `mongodb-memory-server` · Docker y Docker Compose.
+Node.js 24 · Express 5 · SQLite con el módulo nativo `node:sqlite` (sin dependencias nativas ni ORM) · JWT (`jsonwebtoken`) · `bcryptjs` · validación con `zod` · tests con `node:test` + `supertest` · Docker y Docker Compose.
 
 ### Suposiciones tomadas
 
-- **MongoDB** como base de datos de ambos servicios: encaja bien con un catálogo de esquema flexible y simplifica el MVP. Se puede cambiar por servicio (p. ej. PostgreSQL para usuarios) sin afectar al otro.
+- **SQLite** como base de datos de ambos servicios: cero infraestructura extra y suficiente para el MVP. Se usa en modo WAL y con claves foráneas activas. Como SQLite es un archivo local, cada servicio debe correr con **una sola réplica**; para escalar horizontalmente habrá que migrar a un servidor de base de datos (p. ej. PostgreSQL), servicio por servicio.
+- **Ids numéricos** autoincrementales (`INTEGER PRIMARY KEY`).
 - **JWT HS256 con secreto compartido** entre servicios. En producción conviene pasar a RS256 (clave privada solo en `user-service`, pública en el resto) o validar el token en el API Gateway.
 - **Admin inicial** creado al arrancar `user-service` a partir de `ADMIN_EMAIL` / `ADMIN_PASSWORD`. No existe endpoint público para registrarse como admin; un admin puede promover a otros usuarios.
 - **Inventario** guardado como campo `stock` del producto (sin almacenes ni reservas). El ajuste de stock es atómico y nunca deja valores negativos.
@@ -72,7 +74,7 @@ Añade `-v` a `down` para borrar también los volúmenes de datos.
 
 ### Desarrollo local sin Docker
 
-Requiere Node.js 22+ y un MongoDB accesible (o solo los contenedores de base de datos: `docker compose up -d user-db catalog-db` exponiendo puertos).
+Requiere Node.js 22.13 o superior (por `node:sqlite`). No hace falta instalar ninguna base de datos: cada servicio crea su archivo en `./data/` (configurable con `DB_PATH`).
 
 ```bash
 cd services/user-service && npm install && npm run dev
@@ -80,7 +82,7 @@ cd services/user-service && npm install && npm run dev
 
 ### Tests
 
-Cada servicio tiene sus tests de integración; levantan un MongoDB en memoria, así que no necesitan Docker.
+Cada servicio tiene sus tests de integración; usan una base SQLite en memoria, así que no necesitan Docker.
 
 ```bash
 cd services/user-service && npm install && npm test
@@ -122,7 +124,7 @@ Todas las respuestas son JSON. Los errores tienen la forma `{ "error": "...", "d
 | DELETE | `/api/categories/:idOrSlug` | 👑 | Elimina (409 si tiene productos) |
 | GET | `/api/products` | | Lista de productos activos (ver filtros) |
 | GET | `/api/products/:id` | | Detalle de un producto |
-| POST | `/api/products` | 👑 | Crea `{ name, sku, price, description?, currency?, category?, images?, stock?, isActive? }` |
+| POST | `/api/products` | 👑 | Crea `{ name, sku, price, description?, currency?, category?, images?, stock?, isActive? }` (`category` es el id numérico) |
 | PATCH | `/api/products/:id` | 👑 | Actualiza un producto |
 | DELETE | `/api/products/:id` | 👑 | Elimina un producto |
 | GET | `/api/products/:id/inventory` | | `{ productId, sku, stock, inStock }` |
@@ -192,6 +194,7 @@ curl -s 'localhost:3002/api/products?q=teclado&inStock=true'
 
 ### Mejoras de los servicios actuales
 
+- [ ] Migrar de SQLite a un servidor de base de datos (p. ej. PostgreSQL) antes de ejecutar varias réplicas por servicio.
 - [ ] Refresh tokens, cierre de sesión y recuperación de contraseña.
 - [ ] Firma JWT asimétrica (RS256/JWKS) en lugar de secreto compartido.
 - [ ] Documentación OpenAPI/Swagger.
