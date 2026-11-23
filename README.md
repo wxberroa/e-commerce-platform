@@ -1,8 +1,8 @@
 # E-Commerce Platform (microservicios)
 
-Implementación del reto [Scalable E-Commerce Platform](https://roadmap.sh/projects/scalable-ecommerce-platform) de roadmap.sh.
+Plataforma de comercio electrónico escalable basada en microservicios y Docker. Cada funcionalidad (catálogo, usuarios, carrito, pagos, pedidos…) vive en su propio servicio, que se desarrolla, despliega y escala de forma independiente.
 
-Esta primera iteración (MVP) incluye los **dos primeros servicios** del reto:
+Esta primera iteración (MVP) incluye los dos primeros servicios:
 
 | Servicio | Responsabilidad | Puerto | Base de datos |
 |---|---|---|---|
@@ -174,7 +174,7 @@ curl -s 'localhost:3002/api/products?q=teclado&inStock=true'
 
 ## Pendiente
 
-### Microservicios del reto
+### Microservicios
 
 - [ ] **Shopping Cart Service**: carrito por usuario; añadir/quitar productos y cambiar cantidades. Consultará precio y stock al Product Catalog Service. Candidato natural a Redis.
 - [ ] **Order Service**: crear pedidos a partir del carrito, seguimiento de estado e historial. Usará `POST /api/products/:id/inventory/adjust` para descontar stock (habrá que añadir reservas y compensación si el pago falla, p. ej. patrón Saga).
